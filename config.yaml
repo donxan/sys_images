@@ -80,6 +80,8 @@ images:
     - kaniko-project/executor
     - google-samples/xtrabackup
   docker.io:
+    - bitnami/nginx
+    - linuxserver/nginx
     - calico/node
     - calico/typha
     - calico/cni
