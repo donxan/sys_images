@@ -1,5 +1,15 @@
 last: 1000
 images:
+  docker.io:
+    - bitnami/nginx
+    - linuxserver/nginx
+    - calico/node
+    - calico/typha
+    - calico/cni
+    - calico/kube-controllers
+    - calico/pod2daemon-flexvol
+    - flannel/flannel
+    - flannel/flannel-cni-plugin
   lscr.io:
     - linuxserver/nginx
     - linuxserver/wps-office
@@ -97,16 +107,6 @@ images:
   gcr.io:
     - kaniko-project/executor
     - google-samples/xtrabackup
-  docker.io:
-    - bitnami/nginx
-    - linuxserver/nginx
-    - calico/node
-    - calico/typha
-    - calico/cni
-    - calico/kube-controllers
-    - calico/pod2daemon-flexvol
-    - flannel/flannel
-    - flannel/flannel-cni-plugin
   ghcr.io:
     - coroot/coroot
     - coroot/coroot-cluster-agent
