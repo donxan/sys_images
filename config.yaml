@@ -1,5 +1,23 @@
 last: 1000
 images:
+  lscr.io:
+    - linuxserver/nginx
+    - linuxserver/wps-office
+    - linuxserver/wireguard
+    - linuxserver/transmission
+    - linuxserver/filebrowser
+    - linuxserver/bookstack
+    - linuxserver/nextcloud
+    - linuxserver/owncloud
+    - linuxserver/gitea
+    - linuxserver/mariadb
+    - linuxserver/mongodb
+    - linuxserver/redis
+    - linuxserver/postgres
+    - linuxserver/plex
+    - linuxserver/sonar
+    - linuxserver/radar
+    - linuxserver/emby
   docker.elastic.co:
     - elasticsearch/elasticsearch
     - kibana/kibana
