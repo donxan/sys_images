@@ -1,6 +1,7 @@
 last: 1000
 images:
   docker.io:
+    - imroc/logrotate
     - bitnami/nginx
     - linuxserver/nginx
     - calico/node

@@ -1,0 +1,122 @@
+docker.elastic.co:
+  images:
+    apm/apm-server:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+    app-search/app-search:
+    - 7.6.2
+    - 7.6.1
+    - 7.6.0
+    - 7.5.2
+    - 7.5.1
+    beats/auditbeat:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+    beats/filebeat:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+    beats/heartbeat:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+    beats/journalbeat:
+    - 7.15.2
+    - 7.15.1
+    - 7.15.0
+    - 7.14.2
+    - 7.14.1
+    beats/metricbeat:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+    beats/packetbeat:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+    elasticsearch/elasticsearch:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+    kibana/kibana:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+    logstash/logstash:
+    - 9.0.3
+    - 9.0.2
+    - 9.0.1
+    - 9.0.0
+    - 8.18.3
+docker.io:
+  images:
+    calico/kube-controllers:
+    - master
+    calico/pod2daemon-flexvol:
+    - master
+    flannel/flannel:
+    - v0.27.1
+    - v0.27.0
+    - v0.26.7
+    - v0.26.6
+    - v0.26.5
+    flannel/flannel-cni-plugin:
+    - v1.2.0
+    - v1.1.0
+    - v1.1.2
+gcr.io:
+  images:
+    google-samples/xtrabackup:
+    - '1.0'
+ghcr.io:
+  images: {}
+k8s.gcr.io:
+  images: {}
+lscr.io:
+  images: {}
+quay.io:
+  images:
+    ceph/ceph:
+    - v18.2.7-20250507
+    - v18.2.6-20250417
+    - v18.2.5-20250407
+    - v19.2.2-20250409
+    - v19.2.1-20250202
+    cilium/hubble-ui:
+    - pr_renat_logs-7562211
+    - master-7209683
+    cilium/hubble-ui-backend:
+    - master-7209683
+    prometheus-operator/prometheus-config-reloader:
+    - main
+    prometheus-operator/prometheus-operator:
+    - main
+    prometheus/alertmanager:
+    - main
+    prometheus/prometheus:
+    - main
+    thanos/thanos:
+    - main-2025-07-01-3530951
+    - main-2025-06-26-3727363
+    - main-2025-05-15-8809244
+    - main-2025-03-03-7457649
+registry.k8s.io:
+  images: {}

@@ -1,0 +1,48 @@
+# 注释
+*.log         # 忽略所有.log文件
+!error.log    # 但保留error.log
+/at-root      # 仅忽略项目根目录下的at-root文件
+docs/**/*.tmp # 忽略docs目录下所有的.tmp文件
+*.zip         # 忽略所有zip文件
+
+# 目录忽略
+build/
+dist/
+target/
+
+# 开发环境文件
+.env
+.idea/
+.vscode/
+*.suo
+*.njsproj
+*.sln
+
+# 操作系统生成文件
+.DS_Store
+Thumbs.db
+
+# 依赖目录
+node_modules/
+vendor/
+venv/
+# Byte-compiled
+__pycache__/
+*.pyc
+ 
+# Environment
+env/
+.venv/
+venv/
+ 
+# PyCharm
+.idea/
+ 
+# Flask
+instance/
+.env
+ 
+# distribution / packaging
+build/
+dist/
+*.egg-info/
