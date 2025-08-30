@@ -48,7 +48,7 @@ jobs:
 
     - name: Run image synchronization
       run: |
-        python generate_sync.py
+        python gen_sync_yaml_new.py
 
     - name: Upload sync logs
       uses: actions/upload-artifact@v4
