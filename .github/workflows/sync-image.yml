@@ -1,0 +1,112 @@
+name: Sync Images to Aliyun
+
+on:
+  workflow_dispatch: # 手动触发
+  schedule:
+    - cron: '0 */2 * * *' # 每天 UTC 时间 2:00 (北京时间 10:00) 自动运行
+  push:
+    branches: [ main ]
+    paths:
+      - 'config.yaml'
+      - 'custom_sync.yaml'
+      - '.github/workflows/sync-images.yml'
+
+env:
+  HUB_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+  HUB_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+  HUB_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  REPO_NAMESPACE: ctrimg
+
+jobs:
+  generate-config:
+    name: Generate Sync Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      sync-file: ${{ steps.generate.outputs.sync-file }}
+      custom-sync-file: ${{ steps.generate.outputs.custom-sync-file }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyyaml requests
+
+    - name: Generate sync configuration
+      id: generate
+      run: |
+        python generate_sync.py
+        echo "sync-file=sync.yaml" >> $GITHUB_OUTPUT
+        echo "custom-sync-file=custom_sync.yaml" >> $GITHUB_OUTPUT
+
+    - name: Upload generated configs
+      uses: actions/upload-artifact@v3
+      with:
+        name: sync-configs
+        path: |
+          sync.yaml
+          custom_sync.yaml
+
+  sync-images:
+    name: Sync Images
+    needs: generate-config
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config-file: [sync.yaml, custom_sync.yaml]
+    timeout-minutes: 120
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download configs
+      uses: actions/download-artifact@v3
+      with:
+        name: sync-configs
+
+    - name: Install skopeo
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y skopeo
+
+    - name: Login to Aliyun Registry
+      run: |
+        skopeo login -u "$HUB_USERNAME" -p "$HUB_PASSWORD" "$HUB_REGISTRY"
+
+    - name: Sync images from ${{ matrix.config-file }}
+      run: |
+        echo "Syncing images from ${{ matrix.config-file }}"
+        skopeo --insecure-policy sync -a --src yaml --dest docker "${{ matrix.config-file }}" "$HUB_REGISTRY/$REPO_NAMESPACE"
+        
+        # 记录同步结果
+        echo "SYNC_COMPLETED_$(echo ${{ matrix.config-file }} | tr '.' '_' | tr '[a-z]' '[A-Z]')=true" >> $GITHUB_ENV
+
+    - name: Verify sync results
+      run: |
+        echo "Sync completed for ${{ matrix.config-file }}"
+        if [ -f "${{ matrix.config-file }}" ]; then
+          echo "Config file content:"
+          cat "${{ matrix.config-file }}" | head -20
+        fi
+
+  notify:
+    name: Notify Result
+    needs: sync-images
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Send notification
+      run: |
+        echo "Sync job completed with status: ${{ needs.sync-images.result }}"
+        # 这里可以添加邮件、Slack、Webhook等通知方式
+        # 例如使用 curl 发送到 Webhook
+        # curl -X POST -H "Content-Type: application/json" -d '{"status":"${{ needs.sync-images.result }}"}' $WEBHOOK_URL
