@@ -47,7 +47,7 @@ jobs:
         echo "custom-sync-file=custom_sync.yaml" >> $GITHUB_OUTPUT
 
     - name: Upload generated configs
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: sync-configs
         path: |
