@@ -11,6 +11,7 @@ images:
     - calico/pod2daemon-flexvol
     - flannel/flannel
     - flannel/flannel-cni-plugin
+    - apache/seata-server:2.5.0.jdk17
   lscr.io:
     - linuxserver/nginx
     - linuxserver/wps-office
