@@ -1,9 +1,9 @@
 name: Sync Images to Aliyun
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 */2 * * *' # 每天 UTC 时间 2:00 (北京时间 10:00) 自动运行
+    - cron: '0 2 * * *'
   push:
     branches: [ main ]
     paths:
@@ -22,8 +22,7 @@ jobs:
     name: Generate Sync Configuration
     runs-on: ubuntu-latest
     outputs:
-      sync-file: ${{ steps.generate.outputs.sync-file }}
-      custom-sync-file: ${{ steps.generate.outputs.custom-sync-file }}
+      has-sync-content: ${{ steps.check-content.outputs.has-sync-content }}
     
     steps:
     - name: Checkout code
@@ -40,11 +39,18 @@ jobs:
         pip install pyyaml requests
 
     - name: Generate sync configuration
-      id: generate
+      run: python gen_sync_yaml_new.py
+
+    - name: Check if sync content exists
+      id: check-content
       run: |
-        python gen_sync_yaml_new.py
-        echo "sync-file=sync.yaml" >> $GITHUB_OUTPUT
-        echo "custom-sync-file=custom_sync.yaml" >> $GITHUB_OUTPUT
+        if [ -f "sync.yaml" ] && [ -s "sync.yaml" ]; then
+          echo "has-sync-content=true" >> $GITHUB_OUTPUT
+        elif [ -f "custom_sync.yaml" ] && [ -s "custom_sync.yaml" ]; then
+          echo "has-sync-content=true" >> $GITHUB_OUTPUT
+        else
+          echo "has-sync-content=false" >> $GITHUB_OUTPUT
+        fi
 
     - name: Upload generated configs
       uses: actions/upload-artifact@v4
@@ -57,11 +63,12 @@ jobs:
   sync-images:
     name: Sync Images
     needs: generate-config
+    if: needs.generate-config.outputs.has-sync-content == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
         config-file: [sync.yaml, custom_sync.yaml]
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
     - name: Checkout code
@@ -83,30 +90,35 @@ jobs:
 
     - name: Sync images from ${{ matrix.config-file }}
       run: |
-        echo "Syncing images from ${{ matrix.config-file }}"
-        skopeo --insecure-policy sync -a --src yaml --dest docker "${{ matrix.config-file }}" "$HUB_REGISTRY/$REPO_NAMESPACE"
-        
-        # 记录同步结果
-        echo "SYNC_COMPLETED_$(echo ${{ matrix.config-file }} | tr '.' '_' | tr '[a-z]' '[A-Z]')=true" >> $GITHUB_ENV
+        if [ -f "${{ matrix.config-file }}" ] && [ -s "${{ matrix.config-file }}" ]; then
+          echo "开始同步 ${{ matrix.config-file }} 中的镜像..."
+          skopeo --insecure-policy sync -a --src yaml --dest docker \
+            "${{ matrix.config-file }}" "$HUB_REGISTRY/$REPO_NAMESPACE"
+          echo "✅ ${{ matrix.config-file }} 同步完成"
+        else
+          echo "⚠️  ${{ matrix.config-file }} 为空或不存在，跳过同步"
+        fi
 
     - name: Verify sync results
       run: |
-        echo "Sync completed for ${{ matrix.config-file }}"
+        echo "同步任务完成"
         if [ -f "${{ matrix.config-file }}" ]; then
-          echo "Config file content:"
-          cat "${{ matrix.config-file }}" | head -20
+          echo "配置文件内容摘要:"
+          head -n 20 "${{ matrix.config-file }}"
         fi
 
   notify:
     name: Notify Result
-    needs: sync-images
+    needs: [generate-config, sync-images]
     if: always()
     runs-on: ubuntu-latest
     
     steps:
     - name: Send notification
       run: |
-        echo "Sync job completed with status: ${{ needs.sync-images.result }}"
-        # 这里可以添加邮件、Slack、Webhook等通知方式
-        # 例如使用 curl 发送到 Webhook
-        # curl -X POST -H "Content-Type: application/json" -d '{"status":"${{ needs.sync-images.result }}"}' $WEBHOOK_URL
+        echo "同步任务状态:"
+        echo "生成配置: ${{ needs.generate-config.result }}"
+        echo "同步镜像: ${{ needs.sync-images.result }}"
+        
+        # 这里可以添加实际的通知逻辑
+        # 例如: curl -X POST -d "status=completed" $WEBHOOK_URL

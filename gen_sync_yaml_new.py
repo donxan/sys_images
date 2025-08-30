@@ -3,11 +3,11 @@ import re
 import yaml
 import requests
 import concurrent.futures
-from distutils.version import LooseVersion
-from typing import List, Dict, Any, Optional
+import time
+from typing import List, Dict, Any, Set, Tuple
 from functools import lru_cache
 import logging
-import time
+from urllib.parse import urlparse
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,6 +19,10 @@ CONFIG_FILE = os.path.join(BASE_DIR, 'config.yaml')
 SYNC_FILE = os.path.join(BASE_DIR, 'sync.yaml')
 CUSTOM_SYNC_FILE = os.path.join(BASE_DIR, 'custom_sync.yaml')
 
+# 目标仓库配置
+TARGET_REGISTRY = "registry.cn-hangzhou.aliyuncs.com"
+TARGET_NAMESPACE = "ctrimg"
+
 # 全局请求头
 DEFAULT_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (compatible; ImageSyncBot/1.0; +https://github.com/your-repo/image-sync)'
@@ -29,311 +33,385 @@ EXCLUDE_KEYWORDS = ['alpha', 'beta', 'rc', 'dev', 'test', 'amd64', 'ppc64le', 'a
 
 # 请求超时时间（秒）
 REQUEST_TIMEOUT = 30
+# 最大并发数
+MAX_WORKERS = 10
+# 每个镜像最多同步的版本数
+MAX_TAGS_PER_IMAGE = 5
 
-def is_exclude_tag(tag: str) -> bool:
-    """判断是否是需要排除的标签"""
-    if not tag or not isinstance(tag, str):
-        return True
-        
-    tag_lower = tag.lower()
+class ImageSync:
+    def __init__(self):
+        self.source_handlers = {
+            'gcr.io': self.get_gcr_tags,
+            'k8s.gcr.io': self.get_gcr_tags,
+            'registry.k8s.io': self.get_gcr_tags,
+            'quay.io': self.get_quay_tags,
+            'docker.elastic.co': self.get_elastic_tags,
+            'ghcr.io': self.get_ghcr_tags,
+            'docker.io': self.get_docker_io_tags
+        }
     
-    # 排除过长的标签（可能是哈希值）
-    if len(tag) >= 40:
-        return True
-        
-    # 排除包含关键词的标签
-    for keyword in EXCLUDE_KEYWORDS:
-        if keyword.lower() in tag_lower:
+    def is_exclude_tag(self, tag: str) -> bool:
+        """判断是否是需要排除的标签"""
+        if not tag or not isinstance(tag, str):
             return True
             
-    # 处理特定模式的标签
-    if re.search(r"-\w{9,}", tag):  # 类似提交哈希的模式
-        return True
+        tag_lower = tag.lower()
         
-    # 允许带有数字后缀的标签（如v1.2.3-1）
-    if re.search(r"-\d+$", tag):
-        return False
-        
-    # 排除其他带有连字符的标签
-    if '-' in tag:
-        return True
-        
-    return False
-
-@lru_cache(maxsize=128)
-def get_aliyun_tags(image_name: str) -> List[str]:
-    """获取阿里云镜像仓库的所有标签"""
-    try:
-        # 简化版本：直接尝试访问API
-        url = f"https://registry.cn-hangzhou.aliyuncs.com/v2/ctrimg/{image_name}/tags/list"
-        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('tags', [])
-    except Exception as e:
-        logger.warning(f"获取阿里云镜像 {image_name} 标签失败: {e}")
-    
-    return []
-
-def get_gcr_tags(image: str, limit: int = 5, host: str = "k8s.gcr.io") -> List[str]:
-    """获取 GCR 镜像标签"""
-    try:
-        url = f"https://{host}/v2/{image}/tags/list"
-        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        
-        tags = [tag for tag in data.get('tags', []) if not is_exclude_tag(tag)]
-        tags.sort(key=LooseVersion, reverse=True)
-        
-        # 获取阿里云已有标签并过滤
-        aliyun_tags = get_aliyun_tags(image.split('/')[-1])
-        unsynced_tags = [tag for tag in tags if tag not in aliyun_tags]
-        
-        return unsynced_tags[:limit]
-        
-    except Exception as e:
-        logger.error(f"获取 {host}/{image} 标签失败: {e}")
-        return []
-
-def get_quay_tags(image: str, limit: int = 5) -> List[str]:
-    """获取 Quay.io 镜像标签"""
-    try:
-        url = f"https://quay.io/api/v1/repository/{image}/tag/?onlyActiveTags=true&limit=100"
-        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        
-        tags = []
-        for tag_info in data.get('tags', []):
-            tag_name = tag_info.get('name', '')
-            if not is_exclude_tag(tag_name):
-                tags.append(tag_name)
-        
-        tags.sort(key=LooseVersion, reverse=True)
-        
-        # 获取阿里云已有标签并过滤
-        aliyun_tags = get_aliyun_tags(image.split('/')[-1])
-        unsynced_tags = [tag for tag in tags if tag not in aliyun_tags]
-        
-        return unsynced_tags[:limit]
-        
-    except Exception as e:
-        logger.error(f"获取 quay.io/{image} 标签失败: {e}")
-        return []
-
-def get_elastic_tags(image: str, limit: int = 5) -> List[str]:
-    """获取 Elastic 镜像标签"""
-    try:
-        # 简化版本：直接获取标签列表
-        url = f"https://docker.elastic.co/v2/{image}/tags/list"
-        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        
-        tags = [tag for tag in data.get('tags', []) if not is_exclude_tag(tag)]
-        tags.sort(key=LooseVersion, reverse=True)
-        
-        # 获取阿里云已有标签并过滤
-        aliyun_tags = get_aliyun_tags(image.split('/')[-1])
-        unsynced_tags = [tag for tag in tags if tag not in aliyun_tags]
-        
-        return unsynced_tags[:limit]
-        
-    except Exception as e:
-        logger.error(f"获取 docker.elastic.co/{image} 标签失败: {e}")
-        return []
-
-def get_ghcr_tags(image: str, limit: int = 5) -> List[str]:
-    """获取 GitHub Container Registry 镜像标签"""
-    try:
-        # 对于公开镜像，可以直接访问
-        url = f"https://ghcr.io/v2/{image}/tags/list"
-        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
-        
-        if response.status_code == 200:
-            data = response.json()
-            tags = [tag for tag in data.get('tags', []) if not is_exclude_tag(tag)]
-            tags.sort(key=LooseVersion, reverse=True)
+        # 排除过长的标签（可能是哈希值）
+        if len(tag) >= 40:
+            return True
             
-            # 获取阿里云已有标签并过滤
-            aliyun_tags = get_aliyun_tags(image.split('/')[-1])
-            unsynced_tags = [tag for tag in tags if tag not in aliyun_tags]
-            
-            return unsynced_tags[:limit]
-        else:
-            logger.warning(f"获取 ghcr.io/{image} 标签失败: HTTP {response.status_code}")
-            return []
-            
-    except Exception as e:
-        logger.error(f"获取 ghcr.io/{image} 标签失败: {e}")
-        return []
-
-def get_docker_io_tags(image: str, limit: int = 5) -> List[str]:
-    """获取 Docker Hub 镜像标签"""
-    try:
-        namespace_image = image.split('/')
-        if len(namespace_image) != 2:
-            logger.error(f"Docker Hub 镜像名称格式错误: {image}")
-            return []
-        
-        username, image_name = namespace_image
-        url = f"https://hub.docker.com/v2/namespaces/{username}/repositories/{image_name}/tags?page=1&page_size=100"
-        
-        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        
-        tags = []
-        for tag_info in data.get('results', []):
-            tag_name = tag_info.get('name', '')
-            if not is_exclude_tag(tag_name):
-                tags.append(tag_name)
-        
-        tags.sort(key=LooseVersion, reverse=True)
-        
-        # 获取阿里云已有标签并过滤
-        aliyun_tags = get_aliyun_tags(image_name)
-        unsynced_tags = [tag for tag in tags if tag not in aliyun_tags]
-        
-        return unsynced_tags[:limit]
-        
-    except Exception as e:
-        logger.error(f"获取 docker.io/{image} 标签失败: {e}")
-        return []
-
-def process_single_image(repo: str, image: str, limit: int = 5) -> Dict[str, Any]:
-    """处理单个镜像的标签获取"""
-    repo_handlers = {
-        'gcr.io': lambda img, lim: get_gcr_tags(img, lim, "gcr.io"),
-        'k8s.gcr.io': lambda img, lim: get_gcr_tags(img, lim, "k8s.gcr.io"),
-        'registry.k8s.io': lambda img, lim: get_gcr_tags(img, lim, "registry.k8s.io"),
-        'quay.io': get_quay_tags,
-        'docker.elastic.co': get_elastic_tags,
-        'ghcr.io': get_ghcr_tags,
-        'docker.io': get_docker_io_tags
-    }
-    
-    try:
-        if repo in repo_handlers:
-            handler = repo_handlers[repo]
-            sync_tags = handler(image, limit)
-            return {'repo': repo, 'image': image, 'tags': sync_tags, 'success': True}
-        else:
-            return {'repo': repo, 'image': image, 'tags': [], 'success': False, 'error': 'Unsupported repo'}
-    except Exception as e:
-        logger.error(f"处理镜像 {repo}/{image} 失败: {e}")
-        return {'repo': repo, 'image': image, 'tags': [], 'success': False, 'error': str(e)}
-
-def generate_dynamic_conf() -> None:
-    """生成动态同步配置（使用并发处理）"""
-    logger.info("开始生成动态同步配置")
-    
-    try:
-        with open(CONFIG_FILE, 'r') as stream:
-            config = yaml.safe_load(stream)
-    except Exception as e:
-        logger.error(f"读取配置文件失败: {e}")
-        return
-    
-    skopeo_sync_data = {}
-    tasks = []
-    
-    # 准备所有任务
-    for repo, images in config.get('images', {}).items():
-        if not images:
-            continue
-            
-        if repo not in skopeo_sync_data:
-            skopeo_sync_data[repo] = {'images': {}}
-        
-        for image in images:
-            tasks.append((repo, image, config.get('last', 5)))
-    
-    # 使用线程池并发处理
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:  # 减少并发数避免被限流
-        future_to_task = {
-            executor.submit(process_single_image, repo, image, limit): (repo, image) 
-            for repo, image, limit in tasks
-        }
-        
-        for future in concurrent.futures.as_completed(future_to_task):
-            task_repo, task_image = future_to_task[future]
-            try:
-                result = future.result()
-                results.append(result)
+        # 排除包含关键词的标签
+        for keyword in EXCLUDE_KEYWORDS:
+            if keyword.lower() in tag_lower:
+                return True
                 
-                if result['success'] and result['tags']:
-                    skopeo_sync_data[result['repo']]['images'][result['image']] = result['tags']
-                    logger.info(f"计划同步 {result['repo']}/{result['image']} 的标签: {result['tags']}")
-                else:
-                    logger.info(f"{result['repo']}/{result['image']} 无需同步新标签")
-                    
-            except Exception as e:
-                logger.error(f"处理任务失败: {e}")
-    
-    # 保存配置
-    try:
-        with open(SYNC_FILE, 'w') as f:
-            yaml.safe_dump(skopeo_sync_data, f, default_flow_style=False)
-        logger.info(f"同步配置已保存到 {SYNC_FILE}")
-        
-        # 打印生成的配置摘要
-        total_images = sum(len(repo_data['images']) for repo_data in skopeo_sync_data.values())
-        total_tags = sum(len(tags) for repo_data in skopeo_sync_data.values() for tags in repo_data['images'].values())
-        logger.info(f"生成配置摘要: {total_images} 个镜像, {total_tags} 个标签")
-        
-    except Exception as e:
-        logger.error(f"保存同步配置失败: {e}")
+        # 处理特定模式的标签
+        if re.search(r"-\w{9,}", tag):  # 类似提交哈希的模式
+            return True
+            
+        # 允许带有数字后缀的标签（如v1.2.3-1）
+        if re.search(r"-\d+$", tag):
+            return False
+            
+        # 排除其他带有连字符的标签
+        if '-' in tag:
+            return True
+            
+        return False
 
-def generate_custom_conf() -> None:
-    """生成自定义同步配置"""
-    logger.info("开始生成自定义同步配置")
-    
-    try:
-        with open(CUSTOM_SYNC_FILE, 'r') as stream:
-            custom_sync_config = yaml.safe_load(stream)
-    except Exception as e:
-        logger.error(f"读取自定义配置文件失败: {e}")
-        return
-    
-    custom_skopeo_sync_data = {}
-    
-    for repo, repo_config in custom_sync_config.items():
-        if repo not in custom_skopeo_sync_data:
-            custom_skopeo_sync_data[repo] = {'images': {}}
+    @lru_cache(maxsize=1024)
+    def get_target_tags(self, image_name: str) -> Set[str]:
+        """获取目标仓库的镜像标签"""
+        try:
+            url = f"https://{TARGET_REGISTRY}/v2/{TARGET_NAMESPACE}/{image_name}/tags/list"
+            response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
+            if response.status_code == 200:
+                data = response.json()
+                return set(data.get('tags', []))
+        except Exception as e:
+            logger.warning(f"获取目标仓库镜像 {image_name} 标签失败: {e}")
         
-        images = repo_config.get('images', {})
-        if not images:
-            continue
+        return set()
+
+    def get_gcr_tags(self, repo: str, image: str, limit: int = MAX_TAGS_PER_IMAGE) -> List[str]:
+        """获取 GCR 镜像标签"""
+        try:
+            host = repo
+            url = f"https://{host}/v2/{image}/tags/list"
+            response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            
+            # 获取所有标签并过滤
+            all_tags = [tag for tag in data.get('tags', []) if not self.is_exclude_tag(tag)]
+            
+            # 按版本号排序（从新到旧）
+            try:
+                all_tags.sort(key=lambda x: tuple(map(int, x.split('.'))) if re.match(r'^\d+\.\d+\.\d+$', x) else (0, 0, 0), reverse=True)
+            except:
+                all_tags.sort(reverse=True)
+            
+            return all_tags[:limit]
+            
+        except Exception as e:
+            logger.error(f"获取 {repo}/{image} 标签失败: {e}")
+            return []
+
+    def get_quay_tags(self, repo: str, image: str, limit: int = MAX_TAGS_PER_IMAGE) -> List[str]:
+        """获取 Quay.io 镜像标签"""
+        try:
+            url = f"https://quay.io/api/v1/repository/{image}/tag/?onlyActiveTags=true&limit=100"
+            response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            
+            tags = []
+            for tag_info in data.get('tags', []):
+                tag_name = tag_info.get('name', '')
+                if not self.is_exclude_tag(tag_name):
+                    tags.append(tag_name)
+            
+            # 按版本号排序
+            try:
+                tags.sort(key=lambda x: tuple(map(int, x.split('.'))) if re.match(r'^\d+\.\d+\.\d+$', x) else (0, 0, 0), reverse=True)
+            except:
+                tags.sort(reverse=True)
+            
+            return tags[:limit]
+            
+        except Exception as e:
+            logger.error(f"获取 {repo}/{image} 标签失败: {e}")
+            return []
+
+    def get_elastic_tags(self, repo: str, image: str, limit: int = MAX_TAGS_PER_IMAGE) -> List[str]:
+        """获取 Elastic 镜像标签"""
+        try:
+            url = f"https://docker.elastic.co/v2/{image}/tags/list"
+            response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            
+            tags = [tag for tag in data.get('tags', []) if not self.is_exclude_tag(tag)]
+            
+            # 按版本号排序
+            try:
+                tags.sort(key=lambda x: tuple(map(int, x.split('.'))) if re.match(r'^\d+\.\d+\.\d+$', x) else (0, 0, 0), reverse=True)
+            except:
+                tags.sort(reverse=True)
+            
+            return tags[:limit]
+            
+        except Exception as e:
+            logger.error(f"获取 {repo}/{image} 标签失败: {e}")
+            return []
+
+    def get_ghcr_tags(self, repo: str, image: str, limit: int = MAX_TAGS_PER_IMAGE) -> List[str]:
+        """获取 GitHub Container Registry 镜像标签"""
+        try:
+            url = f"https://ghcr.io/v2/{image}/tags/list"
+            response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
+            
+            if response.status_code == 200:
+                data = response.json()
+                tags = [tag for tag in data.get('tags', []) if not self.is_exclude_tag(tag)]
+                
+                # 按版本号排序
+                try:
+                    tags.sort(key=lambda x: tuple(map(int, x.split('.'))) if re.match(r'^\d+\.\d+\.\d+$', x) else (0, 0, 0), reverse=True)
+                except:
+                    tags.sort(reverse=True)
+                
+                return tags[:limit]
+            else:
+                logger.warning(f"获取 {repo}/{image} 标签失败: HTTP {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"获取 {repo}/{image} 标签失败: {e}")
+            return []
+
+    def get_docker_io_tags(self, repo: str, image: str, limit: int = MAX_TAGS_PER_IMAGE) -> List[str]:
+        """获取 Docker Hub 镜像标签"""
+        try:
+            namespace_image = image.split('/')
+            if len(namespace_image) != 2:
+                logger.error(f"Docker Hub 镜像名称格式错误: {image}")
+                return []
+            
+            username, image_name = namespace_image
+            url = f"https://hub.docker.com/v2/namespaces/{username}/repositories/{image_name}/tags?page=1&page_size=100"
+            
+            response = requests.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            
+            tags = []
+            for tag_info in data.get('results', []):
+                tag_name = tag_info.get('name', '')
+                if not self.is_exclude_tag(tag_name):
+                    tags.append(tag_name)
+            
+            # 按版本号排序
+            try:
+                tags.sort(key=lambda x: tuple(map(int, x.split('.'))) if re.match(r'^\d+\.\d+\.\d+$', x) else (0, 0, 0), reverse=True)
+            except:
+                tags.sort(reverse=True)
+            
+            return tags[:limit]
+            
+        except Exception as e:
+            logger.error(f"获取 {repo}/{image} 标签失败: {e}")
+            return []
+
+    def get_source_tags(self, repo: str, image: str) -> List[str]:
+        """获取源仓库的镜像标签"""
+        if repo in self.source_handlers:
+            return self.source_handlers[repo](repo, image)
+        return []
+
+    def compare_and_generate_sync_list(self, repo: str, image: str) -> List[str]:
+        """比较源和目标标签，生成需要同步的标签列表"""
+        try:
+            # 获取源标签
+            source_tags = self.get_source_tags(repo, image)
+            if not source_tags:
+                return []
+            
+            # 获取目标标签
+            target_image_name = image.split('/')[-1]  # 提取基础镜像名
+            target_tags = self.get_target_tags(target_image_name)
+            
+            # 找出需要同步的标签（在源中存在但在目标中不存在）
+            tags_to_sync = [tag for tag in source_tags if tag not in target_tags]
+            
+            # 限制每个镜像最多同步的版本数
+            return tags_to_sync[:MAX_TAGS_PER_IMAGE]
+            
+        except Exception as e:
+            logger.error(f"比较镜像 {repo}/{image} 标签失败: {e}")
+            return []
+
+    def process_single_image(self, repo: str, image: str) -> Dict[str, Any]:
+        """处理单个镜像的同步"""
+        try:
+            tags_to_sync = self.compare_and_generate_sync_list(repo, image)
+            
+            if tags_to_sync:
+                logger.info(f"需要同步 {repo}/{image}: {tags_to_sync}")
+                return {
+                    'repo': repo,
+                    'image': image,
+                    'tags': tags_to_sync,
+                    'success': True
+                }
+            else:
+                logger.info(f"无需同步 {repo}/{image} (所有标签已存在或无需更新)")
+                return {
+                    'repo': repo,
+                    'image': image,
+                    'tags': [],
+                    'success': True,
+                    'skipped': True
+                }
+                
+        except Exception as e:
+            logger.error(f"处理镜像 {repo}/{image} 失败: {e}")
+            return {
+                'repo': repo,
+                'image': image,
+                'tags': [],
+                'success': False,
+                'error': str(e)
+            }
+
+    def generate_dynamic_config(self) -> Dict[str, Any]:
+        """生成动态同步配置"""
+        logger.info("开始生成动态同步配置")
         
-        for image, tags in images.items():
-            if not tags:
+        try:
+            with open(CONFIG_FILE, 'r') as stream:
+                config = yaml.safe_load(stream)
+        except Exception as e:
+            logger.error(f"读取配置文件失败: {e}")
+            return {}
+        
+        sync_config = {}
+        tasks = []
+        
+        # 准备所有任务
+        for repo, images in config.get('images', {}).items():
+            if not images:
                 continue
                 
-            # 获取阿里云已有标签
-            aliyun_tags = get_aliyun_tags(image.split('/')[-1])
+            if repo not in sync_config:
+                sync_config[repo] = {'images': {}}
             
-            # 筛选未同步的标签
-            unsynced_tags = [tag for tag in tags if tag not in aliyun_tags]
+            for image in images:
+                tasks.append((repo, image))
+        
+        # 使用线程池并发处理
+        total_images = len(tasks)
+        processed_count = 0
+        synced_count = 0
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_task = {
+                executor.submit(self.process_single_image, repo, image): (repo, image) 
+                for repo, image in tasks
+            }
             
-            if unsynced_tags:
-                custom_skopeo_sync_data[repo]['images'][image] = unsynced_tags
-                logger.info(f"计划同步自定义镜像 {repo}/{image} 的标签: {unsynced_tags}")
-            else:
-                logger.info(f"自定义镜像 {repo}/{image} 的所有标签已同步")
+            for future in concurrent.futures.as_completed(future_to_task):
+                repo, image = future_to_task[future]
+                processed_count += 1
+                
+                try:
+                    result = future.result()
+                    
+                    if result['success'] and result.get('tags'):
+                        sync_config[result['repo']]['images'][result['image']] = result['tags']
+                        synced_count += 1
+                        
+                    # 打印进度
+                    if processed_count % 5 == 0:
+                        logger.info(f"处理进度: {processed_count}/{total_images}")
+                        
+                except Exception as e:
+                    logger.error(f"处理任务失败: {e}")
+        
+        # 统计信息
+        total_tags = sum(len(tags) for repo_data in sync_config.values() for tags in repo_data['images'].values())
+        logger.info(f"同步配置生成完成: {synced_count}/{total_images} 个镜像需要同步, 共 {total_tags} 个标签")
+        
+        return sync_config
+
+    def generate_custom_config(self) -> Dict[str, Any]:
+        """生成自定义同步配置"""
+        logger.info("开始生成自定义同步配置")
+        
+        try:
+            with open(CUSTOM_SYNC_FILE, 'r') as stream:
+                custom_config = yaml.safe_load(stream)
+        except Exception as e:
+            logger.error(f"读取自定义配置文件失败: {e}")
+            return {}
+        
+        sync_config = {}
+        
+        for repo, repo_config in custom_config.items():
+            if repo not in sync_config:
+                sync_config[repo] = {'images': {}}
+            
+            images = repo_config.get('images', {})
+            if not images:
+                continue
+            
+            for image, expected_tags in images.items():
+                if not expected_tags:
+                    continue
+                    
+                # 获取目标标签
+                target_image_name = image.split('/')[-1]
+                target_tags = self.get_target_tags(target_image_name)
+                
+                # 筛选需要同步的标签
+                tags_to_sync = [tag for tag in expected_tags if tag not in target_tags]
+                
+                if tags_to_sync:
+                    sync_config[repo]['images'][image] = tags_to_sync
+                    logger.info(f"需要同步自定义镜像 {repo}/{image}: {tags_to_sync}")
+        
+        return sync_config
+
+    def save_config(self, config: Dict[str, Any], file_path: str) -> bool:
+        """保存配置到文件"""
+        try:
+            with open(file_path, 'w') as f:
+                yaml.safe_dump(config, f, default_flow_style=False)
+            logger.info(f"配置已保存到 {file_path}")
+            return True
+        except Exception as e:
+            logger.error(f"保存配置到 {file_path} 失败: {e}")
+            return False
+
+def main():
+    """主函数"""
+    start_time = time.time()
     
-    try:
-        with open(CUSTOM_SYNC_FILE, 'w') as f:
-            yaml.safe_dump(custom_skopeo_sync_data, f, default_flow_style=False)
-        logger.info(f"自定义同步配置已保存到 {CUSTOM_SYNC_FILE}")
-    except Exception as e:
-        logger.error(f"保存自定义同步配置失败: {e}")
+    sync_manager = ImageSync()
+    
+    # 生成动态配置
+    dynamic_config = sync_manager.generate_dynamic_config()
+    if dynamic_config:
+        sync_manager.save_config(dynamic_config, SYNC_FILE)
+    
+    # 生成自定义配置
+    custom_config = sync_manager.generate_custom_config()
+    if custom_config:
+        sync_manager.save_config(custom_config, CUSTOM_SYNC_FILE)
+    
+    end_time = time.time()
+    logger.info(f"同步配置生成完成，总耗时: {end_time - start_time:.2f} 秒")
 
 if __name__ == "__main__":
-    start_time = time.time()
-    generate_dynamic_conf()
-    generate_custom_conf()
-    end_time = time.time()
-    logger.info(f"同步配置生成完成，耗时: {end_time - start_time:.2f} 秒")
+    main()
