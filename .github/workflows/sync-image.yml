@@ -42,7 +42,7 @@ jobs:
     - name: Generate sync configuration
       id: generate
       run: |
-        python generate_sync.py
+        python gen_sync_yaml_new.py
         echo "sync-file=sync.yaml" >> $GITHUB_OUTPUT
         echo "custom-sync-file=custom_sync.yaml" >> $GITHUB_OUTPUT
 
