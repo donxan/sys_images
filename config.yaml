@@ -1,6 +1,7 @@
 last: 1000
 images:
   docker.io:
+    - hiromuhota/webspoo
     - imroc/logrotate
     - bitnami/nginx
     - linuxserver/nginx
