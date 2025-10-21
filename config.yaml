@@ -15,7 +15,6 @@ images:
     - flannel/flannel-cni-plugin
     - apache/seata-server
     - linuxserver/nginx
-    - linuxserver/wps-office
     - linuxserver/wireguard
     - linuxserver/transmission
     - linuxserver/filebrowser
@@ -33,7 +32,6 @@ images:
     - linuxserver/emby    
   lscr.io:
     - linuxserver/nginx
-    - linuxserver/wps-office
     - linuxserver/wireguard
     - linuxserver/transmission
     - linuxserver/filebrowser
