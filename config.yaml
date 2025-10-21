@@ -1,6 +1,7 @@
 last: 1000
 images:
   docker.io:
+    - redislabs/redisinsight
     - hiromuhota/webspoo
     - imroc/logrotate
     - bitnami/nginx
