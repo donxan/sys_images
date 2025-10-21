@@ -82,6 +82,15 @@ docker.io:
     - v1.2.0
     - v1.1.0
     - v1.1.2
+    redislabs/redisinsight
+    - 1.13.1
+    - 1.14.0
+    - v2
+    - 2.68
+    - 2.70
+    - 2.70.1
+    - 2.66
+
 gcr.io:
   images:
     google-samples/xtrabackup:
