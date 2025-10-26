@@ -127,5 +127,11 @@ quay.io:
     - main-2025-06-26-3727363
     - main-2025-05-15-8809244
     - main-2025-03-03-7457649
+    metallb/controller
+    - v0.12.1
+    frrouting/frr
+    - 7.5.0
+    metallb/speaker
+    - v0.12.1    
 registry.k8s.io:
   images: {}
